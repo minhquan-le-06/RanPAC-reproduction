@@ -1,7 +1,13 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 .ipynb_checkpoints/
 .venv/
 wandb/
 .env
+
+# Data & Large Checkpoints
+ranpac-data/
+ranpac-runs/
+*.pt
+*.npz
 

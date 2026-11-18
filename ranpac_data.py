@@ -112,10 +112,8 @@ class FeatureCache:
 
         if self.model is None:
             timm.layers.set_fused_attn(False)
-            # Use the same AugReg NPZ as timm 0.6.12, even if HF Hub is installed.
             self.model = timm.create_model(
                 MODEL_ID, pretrained=True, num_classes=0,
-                pretrained_cfg_overlay={"hf_hub_id": None, "url": CHECKPOINT_URL},
             ).eval().requires_grad_(False).to(self.device)
 
         dataset = TaskImages(self.datasets[split], self.config["class_order"], task)

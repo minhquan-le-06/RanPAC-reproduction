@@ -1,31 +1,67 @@
-# Setup RanPAC trên Colab
+# Setup – chạy local bằng venv (Windows, RTX 4060)
 
-Chạy ablation Phase 2 trên Split CIFAR-100 với seed `1993` (10 task, mỗi task 10 lớp).
+Môi trường ảo (virtualenv) đã có sẵn tại: `D:\Tai\ML\RanPAC\.venv` với:
+- **Python**: 3.11
+- **PyTorch**: 2.6.0+cu124 (CUDA khả dụng trên GPU RTX 4060 Laptop 8GB)
+- **torchvision**, **timm** (1.0.31), **wandb** (0.31.0), **Pillow**, **numpy** đã cài đặt đầy đủ.
 
-Cả ba notebook đã được chạy sẵn. Kết quả có trong project W&B `pnp123/ML`.
+---
 
-## Cài đặt
+## 1. Đường dẫn Python venv
 
-1. Copy `ranpac_core.py`, `ranpac_data.py`, `ranpac_colab.py` và `test_ranpac_core.py` từ thư mục gốc vào `MyDrive/RanPAC_implement`. Nếu đặt ở chỗ khác, sửa `SOURCE_DIR` trong notebook.
-2. Mở notebook bằng Google Colab và chọn **Runtime → Change runtime type → GPU**. Hai cell setup cài `timm==1.0.22`, `wandb==0.31.0` và mount Drive. PyTorch và torchvision lấy từ runtime Colab. Khi cần trích embedding, chương trình tự tải CIFAR-100 và trọng số ViT.
-3. Thêm `WANDB_API_KEY` vào **Colab Secrets** và bật quyền truy cập cho notebook. Cả ba notebook log online vào `pnp123/ML` (`WANDB_ENTITY = 'pnp123'`, `WANDB_PROJECT = 'ML'`). Dùng API key của tài khoản có quyền ghi vào project này. Nếu chạy mới trên project riêng, sửa `WANDB_ENTITY` và `WANDB_PROJECT` cho phù hợp.
+Mỗi khi chạy lệnh, bạn dùng trực tiếp Python của venv:
+```powershell
+$py = "D:\Tai\ML\RanPAC\.venv\Scripts\python.exe"
+```
+*(Hoặc kích hoạt venv bằng lệnh: `& D:\Tai\ML\RanPAC\.venv\Scripts\Activate.ps1`)*
 
-## Cấu hình trong notebook
+---
 
-| Notebook | `PRESET` | `RESUME` |
-| --- | --- | --- |
-| [01_ncm_cosine.ipynb](01_ncm_cosine.ipynb) | `ncm` · NCM cosine | `False` |
-| [02_ridge_no_rp.ipynb](02_ridge_no_rp.ipynb) | `ridge` · Ridge không random projection | `False` |
-| [03_ridge_rp_relu.ipynb](03_ridge_rp_relu.ipynb) | `rp-table1` · RP + ReLU, `M=10000`, chọn λ theo task | `True` |
+## 2. Set W&B API Key
 
-Cả ba đặt `STOP_AFTER_TASK = 10`, `RUN_LABEL = 'main'`, `BATCH_SIZE = 48`, `NUM_WORKERS = 2` và `STATS_DEVICE = 'cpu'`. GPU dùng để trích embedding. `RUN_WANDB_SMOKE = False` mặc định.
+```powershell
+# PowerShell (cho session hiện tại)
+$env:WANDB_API_KEY = "your_wandb_api_key_here"
 
-## Chạy mới hoặc resume
+# Hoặc lưu cố định cho tài khoản Windows
+[System.Environment]::SetEnvironmentVariable("WANDB_API_KEY", "your_wandb_api_key_here", "User")
+```
+Lấy API key tại: https://wandb.ai/settings → API keys
 
-- **Chạy lại từ đầu** · Đặt `RESUME = False` và đổi `RUN_LABEL` từ `main` sang tên chưa dùng cho preset đó, ví dụ `rerun-01`, để tránh trùng thư mục checkpoint và tên run trên W&B.
-- **Resume** · Giữ `RESUME = True` và dùng đúng `WORK_DIR`, `RUN_LABEL`, preset, mã nguồn, cấu hình và project W&B của run cũ. Với cấu hình hiện tại của notebook `03`, checkpoint cần có ở `MyDrive/ranpac-runs/runs/rp-table1-s1993-main/checkpoint.pt`.
-- Chạy các cell theo thứ tự. Để kiểm tra W&B, đặt `RUN_WANDB_SMOKE = True` rồi xác nhận `smoke/ok = 1` ở URL in ra. Nếu chỉ muốn thử một task khi chạy mới, đặt `STOP_AFTER_TASK = 1`. Sau đó bật `RESUME = True` và tăng `STOP_AFTER_TASK` để chạy tiếp.
+---
 
-## Kết quả
+## 3. Chạy thực nghiệm RanPAC trên máy (tự đẩy lên W&B)
 
-Mặc định Drive lưu run tại `MyDrive/ranpac-runs/runs/<preset>-s1993-<run_label>/`. Trong đó có `checkpoint.pt` để resume, `config.json`, `metrics.csv` với `A[t]` và `accuracy_matrix.csv` với `R[t,i]`. Cache embedding dùng chung nằm ở `MyDrive/ranpac-runs/embeddings/`.
+Mở PowerShell tại thư mục `d:\Tai\ML\RanPAC-reproduction\`:
+
+```powershell
+cd d:\Tai\ML\RanPAC-reproduction
+$py = "D:\Tai\ML\RanPAC\.venv\Scripts\python.exe"
+
+# 1. Preset rp-table-a5 (M=2500, λ=100) — [Table A5: mốc 87.7%] (Phần còn thiếu)
+& $py run_local.py --preset rp-table-a5 --wandb_entity pnp123 --wandb_project ML --run_label local
+
+# 2. Preset ncm (NCM Cosine) — [Table 1: mốc 83.4%]
+& $py run_local.py --preset ncm --wandb_entity pnp123 --wandb_project ML --run_label local
+
+# 3. Preset ridge (Ridge không RP) — [Table 1: mốc 87.0%]
+& $py run_local.py --preset ridge --wandb_entity pnp123 --wandb_project ML --run_label local
+
+# 4. Preset rp-table1 (Ridge + RP M=10000) — [Table 1: mốc 89.0%]
+& $py run_local.py --preset rp-table1 --wandb_entity pnp123 --wandb_project ML --run_label local
+```
+
+> **Lưu ý**:
+> - Trên Windows nếu DataLoader báo lỗi đa luồng, thêm `--workers 0`.
+> - Tham số `--stats_device cuda` có thể tăng tốc tính ma trận cho `rp-table1`.
+
+---
+
+## Bảng đối chiếu kết quả Paper
+
+| Preset | Phương pháp | Kết quả thực tế | Mốc Paper | Chênh lệch (Δ) | Trạng thái |
+|--------|------------|-----------------|-----------|----------------|------------|
+| `ncm` | NCM cosine | **83.38%** | 83.4% | −0.02 pp | Đã chạy (Colab) |
+| `ridge` | Ridge (no RP) | **87.02%** | 87.0% | +0.02 pp | Đã chạy (Colab) |
+| `rp-table1` | Ridge + RP (M=10000) | **88.75%** | 89.0% | −0.25 pp | Đã chạy (Colab) |
+| `rp-table-a5` | Ridge + RP (M=2500) | **87.68%** | 87.7% | −0.02 pp | Đã chạy (Local RTX 4060) ✅ |

@@ -1,1 +1,9 @@
+# RanPAC reproduction – local environment
+# Install PyTorch with CUDA first (see SETUP.md), then:
+#   pip install -r requirements.txt
 
+timm==1.0.22
+wandb==0.31.0
+torchvision
+numpy
+Pillow

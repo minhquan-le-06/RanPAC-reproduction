@@ -227,10 +227,12 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     classifier.to(stats_device)
 
     # For offline continuation, preserve each SDK log directory on Drive for later sync.
-    log_dir = run_dir if wandb_mode == "offline" else Path("/content")
+    # Use run_dir for both offline and online when /content (Colab) doesn't exist.
+    _colab_dir = Path("/content")
+    log_dir = run_dir if wandb_mode == "offline" or not _colab_dir.exists() else _colab_dir
     resume_option = None
     if wandb_mode == "online":
-        resume_option = "must" if identity["initialized"] else "allow" if resume else "never"
+        resume_option = "must" if (resume and identity["initialized"]) else "never"
     with wandb.init(
         entity=entity, project=project, id=identity["id"], name=run_name,
         group=f"cifar100-phase2-table-{config['reference_table']}", tags=[method],
