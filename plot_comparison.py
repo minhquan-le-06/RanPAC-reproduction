@@ -1,4 +1,4 @@
-"""Plot accuracy curves comparing all Phase 2 methods on Split CIFAR-100."""
+"""Plot accuracy curves comparing all methods on Split CIFAR-100."""
 
 import csv
 from pathlib import Path
@@ -21,6 +21,9 @@ ridge_acc = [97.80, 95.50, 94.53, 92.80, 91.50, 90.37, 90.00, 88.30, 87.46, 87.0
 rp1_tasks = list(range(6, 11))
 rp1_acc = [91.60, 91.43, 89.72, 89.14, 88.75]
 
+# 3. Algorithm 1 (Phase 1 AdaptFormer + Phase 2 Ridge+RP, M=10000)
+alg1_acc = [99.00, 97.85, 97.43, 96.15, 95.24, 94.32, 94.07, 92.88, 92.39, 92.02]
+
 tasks = list(range(1, 11))
 
 plt.figure(figsize=(9, 5.5), dpi=300)
@@ -29,14 +32,15 @@ plt.plot(tasks, ncm_acc, marker='o', linewidth=2, label=f'NCM Cosine (Final: {nc
 plt.plot(tasks, ridge_acc, marker='s', linewidth=2, label=f'Ridge (no RP) (Final: {ridge_acc[-1]:.2f}%, Paper: 87.0%)', color='#3498db')
 plt.plot(tasks, a5_acc, marker='^', linewidth=2.5, label=f'RanPAC (M=2500, λ=100) (Final: {a5_acc[-1]:.2f}%, Paper: 87.7%)', color='#2ecc71')
 plt.plot(rp1_tasks, rp1_acc, marker='D', linewidth=2, linestyle='--', label=f'RanPAC (M=10000, Table 1) (Final: {rp1_acc[-1]:.2f}%, Paper: 89.0%)', color='#9b59b6')
+plt.plot(tasks, alg1_acc, marker='*', linewidth=2.5, label=f'Algorithm 1 (Phase1+Phase2) (Final: {alg1_acc[-1]:.2f}%, Paper: 92.2%)', color='#f39c12')
 
 plt.title('Continual Learning on Split CIFAR-100 (10 Tasks, 10 Classes/Task)\nRanPAC Reproduction Comparison', fontsize=13, fontweight='bold', pad=12)
 plt.xlabel('Task', fontsize=11, fontweight='bold')
 plt.ylabel('Average Accuracy (%) across Seen Classes', fontsize=11, fontweight='bold')
 plt.xticks(tasks)
-plt.ylim(80, 100)
+plt.ylim(80, 102)
 plt.grid(True, linestyle='--', alpha=0.5)
-plt.legend(loc='lower left', fontsize=10, framealpha=0.9)
+plt.legend(loc='lower left', fontsize=9.5, framealpha=0.9)
 
 output_path = Path("accuracy_comparison.png")
 plt.tight_layout()

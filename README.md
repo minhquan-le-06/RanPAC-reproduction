@@ -29,17 +29,20 @@ Benchmark Split CIFAR-100 gồm **10 task liên tiếp**, mỗi task 10 lớp ng
 |:---:|:---|:---|:---:|:---:|:---:|:---:|
 | 1 | **NCM Cosine** | Frozen ViT + Nearest Class Mean Cosine | `01_ncm_cosine.ipynb` | **83.38%** | 83.4% (Table 1) | −0.02 pp |
 | 2 | **Ridge (no RP)** | Frozen ViT + Ridge Regression không qua RP | `02_ridge_no_rp.ipynb` | **87.02%** | 87.0% (Table 1) | +0.02 pp |
-| 3 | **RanPAC (Table 1)** | $M=10000$ + ReLU + Task CV $\lambda$ | `03_ridge_rp_relu.ipynb` | **88.75%** | 89.0% (Table 1) | −0.25 pp |
-| 4 | **RanPAC (Table A5)** | $M=2500$ + ReLU + Cố định $\lambda=100$ | `run_local.py` (`rp-table-a5`) | **87.68%** | 87.7% (Table A5) | −0.02 pp |
+| 3 | **RanPAC (Table A5)** | $M=2500$ + ReLU + Cố định $\lambda=100$ | `run_local.py` (`rp-table-a5`) | **87.68%** | 87.7% (Table A5) | −0.02 pp |
+| 4 | **RanPAC (Table 1)** | $M=10000$ + ReLU + Task CV $\lambda$ | `03_ridge_rp_relu.ipynb` | **88.75%** | 89.0% (Table 1) | −0.25 pp |
+| 5 | **Algorithm 1** (full) | Phase 1 AdaptFormer + Phase 2 RanPAC | `04_ranpac_full.ipynb` | **92.02%** | 92.2% (Table 1) | −0.18 pp |
 
 ---
 
 ## 3. Biểu đồ so sánh & Đánh giá Forgetting
 
 ### 3.1. So sánh đường cong độ chính xác qua 10 Task
-Độ chính xác trung bình trên các lớp đã học qua từng task của 4 phương pháp:
+Độ chính xác trung bình trên các lớp đã học qua từng task của 5 phương pháp (Phase 2 ablations + Algorithm 1 đầy đủ):
 
 ![Accuracy Comparison](accuracy_comparison.png)
+
+> **Nhận xét**: Algorithm 1 (có Phase 1 AdaptFormer) đạt 92.02%, cao hơn đáng kể so với tất cả các cấu hình Phase 2 thuần túy, chứng minh vai trò của PETL trên task đầu.
 
 ### 3.2. Ma trận Forgetting $R[t, i]$ (Heatmap)
 Độ chính xác kiểm tra trên task $i$ sau khi đã học xong task $t$ (với cấu hình RanPAC Table A5):
@@ -69,6 +72,7 @@ Chạy tuần tự các notebook trong repo:
 - `01_ncm_cosine.ipynb` (NCM Cosine)
 - `02_ridge_no_rp.ipynb` (Ridge không RP)
 - `03_ridge_rp_relu.ipynb` (RanPAC Table 1)
+- `04_ranpac_full.ipynb` (Algorithm 1: Phase 1 AdaptFormer + Phase 2)
 
 ### 4.3. Chạy Local (Windows / Linux)
 Chạy trực tiếp thông qua script `run_local.py`:
