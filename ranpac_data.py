@@ -1,4 +1,4 @@
-"""CIFAR-100 loading and shared ViT feature shards for Colab."""
+"""Dataset loading and shared ViT feature shards for Colab."""
 
 import hashlib
 import json
@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from ranpac_core import CLASSES_PER_TASK, NUM_CLASSES
+from ranpac_core import CLASSES_PER_TASK
 
 
 MODEL_ID = "vit_base_patch16_224.augreg_in21k"
@@ -55,25 +55,26 @@ def feature_config(class_order, device):
 
 
 class TaskImages(Dataset):
-    def __init__(self, cifar, class_order, task):
-        old_to_new = np.empty(NUM_CLASSES, dtype=np.int64)
-        old_to_new[class_order] = np.arange(NUM_CLASSES)
-        labels = old_to_new[np.asarray(cifar.targets)]
-        stop = task * CLASSES_PER_TASK
-        self.indices = np.flatnonzero((labels >= stop - CLASSES_PER_TASK) & (labels < stop))
+    def __init__(self, dataset, class_order, task, classes_per_task=CLASSES_PER_TASK):
+        num_classes = len(class_order)
+        old_to_new = np.empty(num_classes, dtype=np.int64)
+        old_to_new[class_order] = np.arange(num_classes)
+        labels = old_to_new[np.asarray(dataset.targets)]
+        stop = task * classes_per_task
+        self.indices = np.flatnonzero((labels >= stop - classes_per_task) & (labels < stop))
         self.labels = labels[self.indices]
-        self.cifar = cifar
+        self.dataset = dataset
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, index):
-        image, _ = self.cifar[int(self.indices[index])]
+        image, _ = self.dataset[int(self.indices[index])]
         return image, int(self.labels[index])
 
 
 class FeatureCache:
-    def __init__(self, root, data_root, config, device, batch_size, workers):
+    def __init__(self, root, data_root, config, device, batch_size, workers, *, image_folder=None):
         key = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()[:16]
         self.root = Path(root) / key
         self.data_root = data_root
@@ -81,6 +82,7 @@ class FeatureCache:
         self.device = device
         self.batch_size = batch_size
         self.workers = workers
+        self.image_folder = image_folder
         self.datasets = {}
         self.model = None
 
@@ -102,24 +104,34 @@ class FeatureCache:
 
         if split not in self.datasets:
             transform = transforms.Compose([
-                transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+                transforms.Resize(256 if self.image_folder else 224,
+                                  interpolation=transforms.InterpolationMode.BICUBIC),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
             ])
-            self.datasets[split] = datasets.CIFAR100(
-                root=self.data_root, train=split == "train", transform=transform, download=True,
-            )
+            if self.image_folder is None:
+                self.datasets[split] = datasets.CIFAR100(
+                    root=self.data_root, train=split == "train", transform=transform, download=True,
+                )
+            else:
+                self.datasets[split] = self.image_folder(split, transform)
 
         if self.model is None:
+            if self.image_folder is not None:
+                raise ValueError("Set the adapted backbone before extracting ImageNet-R features.")
             timm.layers.set_fused_attn(False)
+            # Use the same AugReg NPZ as timm 0.6.12, even if HF Hub is installed.
             self.model = timm.create_model(
                 MODEL_ID, pretrained=True, num_classes=0,
+                pretrained_cfg_overlay={"hf_hub_id": None, "url": CHECKPOINT_URL},
             ).eval().requires_grad_(False).to(self.device)
 
-        dataset = TaskImages(self.datasets[split], self.config["class_order"], task)
-        expected = 5000 if split == "train" else 1000
-        if len(dataset) != expected:
+        dataset = TaskImages(self.datasets[split], self.config["class_order"], task,
+                             self.config["classes_per_task"])
+        if self.image_folder is None and len(dataset) != (5000 if split == "train" else 1000):
             raise ValueError(f"Unexpected CIFAR-100 shard size for {split} task {task}")
+        if not len(dataset):
+            raise ValueError(f"No samples in {split} task {task}")
         loader = DataLoader(
             dataset, batch_size=self.batch_size, num_workers=self.workers,
             pin_memory=self.device.type == "cuda", shuffle=False,
@@ -130,6 +142,6 @@ class FeatureCache:
                 embedding = self.model(images.to(self.device, non_blocking=True))
                 batches.append(embedding.float().cpu())
         features = torch.cat(batches)
-        if features.shape != (expected, FEATURE_DIM) or not torch.isfinite(features).all():
+        if features.shape != (len(dataset), FEATURE_DIM) or not torch.isfinite(features).all():
             raise ValueError("Invalid ViT embeddings. Check the backbone and preprocessing.")
         return features, torch.from_numpy(dataset.labels)

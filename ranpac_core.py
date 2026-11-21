@@ -13,9 +13,9 @@ SEED = 1993
 RIDGE_GRID = tuple(10.0**power for power in range(-8, 9))
 
 
-def split_class_order(seed=SEED):
+def split_class_order(seed=SEED, *, num_classes=NUM_CLASSES):
     # RandomState reproduces the authors' np.random.seed + permutation.
-    return np.random.RandomState(seed).permutation(NUM_CLASSES).tolist()
+    return np.random.RandomState(seed).permutation(num_classes).tolist()
 
 
 class NCM(nn.Module):

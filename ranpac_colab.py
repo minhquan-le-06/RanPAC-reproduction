@@ -31,6 +31,9 @@ PRESETS = {
     "rp-table-a5": ("ridge-rp", 2500, 100.0, 87.7),
 }
 
+SWEEP_DIMS = (300, 500, 1000, 1250, 2500, 10000)
+PRESETS.update({f"rp-sweep-m{dim}": ("ridge-rp", dim, None, None) for dim in SWEEP_DIMS})
+
 
 def configure_wandb(entity, mode):
     if not entity or mode not in {"online", "offline"}:
@@ -90,12 +93,13 @@ def log_task(wandb, run, records):
     run.log(payload, step=record["task"], commit=True)
 
 
-def train_task(classifier, cache, task, stats_device, feature_device, fixed_lambda):
+def train_task(classifier, cache, task, stats_device, feature_device, fixed_lambda, *,
+               classes_per_task=CLASSES_PER_TASK, num_classes=NUM_CLASSES):
     started = perf_counter()
     if feature_device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(feature_device)
     features, labels, feature_seconds = cache.load("train", task)
-    seen_classes = task * CLASSES_PER_TASK
+    seen_classes = task * classes_per_task
     fit_started = perf_counter()
     features, labels = features.to(stats_device), labels.to(stats_device)
     ridge = lambda_seconds = solve_seconds = None
@@ -106,7 +110,7 @@ def train_task(classifier, cache, task, stats_device, feature_device, fixed_lamb
             if stats_device.type == "cuda":
                 torch.cuda.synchronize(stats_device)
             search_started = perf_counter()
-            ridge = select_ridge(projected, labels, NUM_CLASSES, SEED, task)
+            ridge = select_ridge(projected, labels, num_classes, SEED, task)
             lambda_seconds = perf_counter() - search_started
         classifier.update(projected, labels)
         del projected
@@ -172,6 +176,13 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     feature_device = torch.device("cuda")
     stats_device = torch.device(stats_device)
     method, projection_dim, fixed_lambda, paper_accuracy = PRESETS[preset]
+    reference_table = "A5" if preset == "rp-table-a5" else "1"
+    if paper_accuracy is None:
+        reference_table = None
+    wandb_group = (
+        f"cifar100-phase2-table-{reference_table}" if reference_table
+        else f"cifar100-phase2-m-sweep-{run_label}"
+    )
     data_config = feature_config(split_class_order(), feature_device)
     source_digest = hashlib.sha256()
     for name in ("ranpac_core.py", "ranpac_data.py", "ranpac_colab.py"):
@@ -191,7 +202,7 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
         "feature_batch_size": batch_size,
         "wandb_version": version("wandb"),
         "source_sha256": source_digest.hexdigest(),
-        "reference_table": "A5" if preset == "rp-table-a5" else "1",
+        "reference_table": reference_table,
         "paper_a10_pct": paper_accuracy,
     }
     run_name = f"{preset}-s{SEED}-{run_label}"
@@ -205,6 +216,13 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     if resume:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         identity = checkpoint["wandb"]
+        # The ImageNet-R extension preserves the CIFAR-100 Phase 2 protocol.
+        previous_digest = checkpoint["config"].get("source_sha256")
+        if previous_digest in {
+            "b459877b18fcc979e6589f8b06a8e7b0e325ae6ab64ac42f0d62b7704a3ab6de",
+            "f4708c06fb9f9be786b1ef8ac1cea5472eb3873ef3b1616be9657944b142370b",
+        }:
+            config["source_sha256"] = previous_digest
         if checkpoint["config"] != config or (identity["entity"], identity["project"]) != (entity, project):
             raise ValueError("Config or W&B project differs from the checkpoint. Use a new run label.")
     else:
@@ -227,15 +245,13 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     classifier.to(stats_device)
 
     # For offline continuation, preserve each SDK log directory on Drive for later sync.
-    # Use run_dir for both offline and online when /content (Colab) doesn't exist.
-    _colab_dir = Path("/content")
-    log_dir = run_dir if wandb_mode == "offline" or not _colab_dir.exists() else _colab_dir
+    log_dir = run_dir if wandb_mode == "offline" else Path("/content")
     resume_option = None
     if wandb_mode == "online":
-        resume_option = "must" if (resume and identity["initialized"]) else "never"
+        resume_option = "must" if identity["initialized"] else "allow" if resume else "never"
     with wandb.init(
         entity=entity, project=project, id=identity["id"], name=run_name,
-        group=f"cifar100-phase2-table-{config['reference_table']}", tags=[method],
+        group=wandb_group, tags=[method],
         config=config, mode=wandb_mode, resume=resume_option, dir=str(log_dir),
     ) as run:
         if not identity["initialized"] or (wandb_mode == "online" and not identity["url"]):
@@ -272,8 +288,11 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
         if len(records) == NUM_TASKS:
             result = records[-1]["avg_accuracy_pct"]
             run.summary["a10_pct"] = result
-            run.summary["paper_a10_pct"] = paper_accuracy
-            run.summary["delta_to_paper_pp"] = result - paper_accuracy
-            print(f"Table {config['reference_table']} | A[10] {result:.2f}% | "
-                  f"paper {paper_accuracy:.1f}% | Δ {result - paper_accuracy:+.2f} pp")
+            if paper_accuracy is None:
+                print(f"M={projection_dim} | A[10] {result:.2f}%")
+            else:
+                run.summary["paper_a10_pct"] = paper_accuracy
+                run.summary["delta_to_paper_pp"] = result - paper_accuracy
+                print(f"Table {config['reference_table']} | A[10] {result:.2f}% | "
+                      f"paper {paper_accuracy:.1f}% | Δ {result - paper_accuracy:+.2f} pp")
     return records

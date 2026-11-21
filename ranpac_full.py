@@ -1,4 +1,4 @@
-"""Algorithm 1 on Split CIFAR-100, with a first-session AdaptFormer."""
+"""Algorithm 1 with a first-session AdaptFormer or SSF."""
 
 import csv
 import hashlib
@@ -17,7 +17,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from ranpac_colab import configure_wandb, export_results, save_checkpoint, train_task
-from ranpac_core import CLASSES_PER_TASK, NUM_TASKS, RIDGE_GRID, SEED, Ridge, split_class_order
+from ranpac_core import CLASSES_PER_TASK, NUM_CLASSES, RIDGE_GRID, SEED, Ridge, split_class_order
 from ranpac_data import (
     CHECKPOINT_URL, FEATURE_DIM, MODEL_ID, FeatureCache, TaskImages, atomic_output,
     feature_config,
@@ -54,9 +54,9 @@ class AdaptedBlock(nn.Module):
 
 
 class CosineHead(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=CLASSES_PER_TASK):
         super().__init__()
-        self.prototypes = nn.Parameter(torch.empty(CLASSES_PER_TASK, FEATURE_DIM))
+        self.prototypes = nn.Parameter(torch.empty(num_classes, FEATURE_DIM))
         nn.init.uniform_(self.prototypes, -1 / math.sqrt(FEATURE_DIM), 1 / math.sqrt(FEATURE_DIM))
         self.scale = nn.Parameter(torch.ones(()))
 
@@ -76,7 +76,7 @@ def build_adapted_backbone(device):
     return backbone.to(device)
 
 
-def first_task_images(data_root, class_order):
+def first_task_images(data_root, class_order, classes_per_task=CLASSES_PER_TASK, image_folder=None):
     from torchvision import datasets, transforms
 
     transform = transforms.Compose([
@@ -84,8 +84,9 @@ def first_task_images(data_root, class_order):
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ])
-    cifar = datasets.CIFAR100(data_root, train=True, transform=transform, download=True)
-    return TaskImages(cifar, class_order, task=1)
+    dataset = (datasets.CIFAR100(data_root, train=True, transform=transform, download=True)
+               if image_folder is None else image_folder("train", transform))
+    return TaskImages(dataset, class_order, task=1, classes_per_task=classes_per_task)
 
 
 def train_epoch(backbone, head, images, optimizer, scaler, epoch, *, device, microbatch, workers):
@@ -129,8 +130,11 @@ def train_epoch(backbone, head, images, optimizer, scaler, epoch, *, device, mic
     }
 
 
-def fit_first_task(backbone, adapters, checkpoint, config, last_epoch, data_root, device, commit):
-    head = CosineHead() if config["temporary_head"] == "cosine" else nn.Linear(FEATURE_DIM, CLASSES_PER_TASK)
+def fit_first_task(backbone, adapters, checkpoint, config, last_epoch, data_root, device, commit,
+                   image_folder=None):
+    classes_per_task = config["classes_per_task"]
+    head = (CosineHead(classes_per_task) if config["temporary_head"] == "cosine"
+            else nn.Linear(FEATURE_DIM, classes_per_task))
     head.to(device)
     optimizer = torch.optim.SGD(
         chain(adapters.parameters(), head.parameters()), lr=LR, momentum=MOMENTUM,
@@ -145,7 +149,7 @@ def fit_first_task(backbone, adapters, checkpoint, config, last_epoch, data_root
         scheduler.load_state_dict(train_state["scheduler"])
         scaler.load_state_dict(train_state["scaler"])
 
-    images = first_task_images(data_root, config["class_order"])
+    images = first_task_images(data_root, config["class_order"], classes_per_task, image_folder)
     for epoch in range(len(checkpoint["epochs"]) + 1, last_epoch + 1):
         record = train_epoch(
             backbone, head, images, optimizer, scaler, epoch, device=device,
@@ -182,10 +186,16 @@ def run_algorithm1(work_dir, *, run_label="main", resume=False, phase1_epochs=20
                    temporary_head="cosine", projection_dim=10000, fixed_lambda=None,
                    feature_batch_size=48, stats_device="cpu", workers=2,
                    data_root="/content/ranpac-data", entity=None, project="ranpac-cifar100",
-                   wandb_mode="disabled"):
+                   wandb_mode="disabled", imagenetr_root=None):
     """Checkpoint after each Phase 1 epoch and each Phase 2 task on one run."""
+    num_classes, classes_per_task = NUM_CLASSES, CLASSES_PER_TASK
+    if imagenetr_root is not None:
+        import ranpac_imagenetr as imagenetr
+
+        num_classes, classes_per_task = imagenetr.NUM_CLASSES, imagenetr.CLASSES_PER_TASK
+    num_tasks = num_classes // classes_per_task
     last_epoch = phase1_epochs if stop_after_epoch is None else stop_after_epoch
-    if not (1 <= last_epoch <= phase1_epochs and 1 <= stop_after_task <= NUM_TASKS):
+    if not (1 <= last_epoch <= phase1_epochs and 1 <= stop_after_task <= num_tasks):
         raise ValueError("Check the requested stop epoch and task.")
     if not 1 <= microbatch <= BATCH_SIZE or feature_batch_size < 1 or workers < 0:
         raise ValueError("Check microbatch, feature_batch_size and workers.")
@@ -204,18 +214,38 @@ def run_algorithm1(work_dir, *, run_label="main", resume=False, phase1_epochs=20
     device = torch.device("cuda")
     stats_device = torch.device(stats_device)
     torch.set_float32_matmul_precision("highest")
-    wandb = None if wandb_mode == "disabled" else configure_wandb(entity, wandb_mode)
+    image_folder = None
+    petl = "adaptformer"
+    dataset_tag = "cifar100"
+    source_files = ["ranpac_core.py", "ranpac_data.py", "ranpac_colab.py", "ranpac_full.py"]
     data_config = feature_config(split_class_order(), device)
+    if imagenetr_root is not None:
+        image_data = imagenetr.ImageNetR(imagenetr_root)
+        image_folder = image_data.image_folder
+        petl = "ssf"
+        dataset_tag = "imagenetr"
+        source_files.append("ranpac_imagenetr.py")
+        data_config.update(
+            dataset="ImageNet-R",
+            class_order=split_class_order(num_classes=num_classes),
+            classes_per_task=classes_per_task,
+            model_id=imagenetr.MODEL_ID,
+            checkpoint=imagenetr.CHECKPOINT_URL,
+            transforms="PIL Resize(256, BICUBIC) -> CenterCrop(224) -> ToTensor()",
+            split_manifest_sha256=image_data.manifest_sha256,
+        )
+    wandb = None if wandb_mode == "disabled" else configure_wandb(entity, wandb_mode)
     source_digest = hashlib.sha256()
-    for name in ("ranpac_core.py", "ranpac_data.py", "ranpac_colab.py", "ranpac_full.py"):
+    for name in source_files:
         source_digest.update(Path(__file__).with_name(name).read_bytes())
     config = {
-        **data_config, "seed": SEED, "petl": "adaptformer", "phase1_epochs": phase1_epochs,
+        **data_config, "seed": SEED, "petl": petl, "phase1_epochs": phase1_epochs,
         "phase1_train_transforms": "RandomResizedCrop(224, scale=(0.05, 1.0), ratio=(3/4, 4/3)) -> RandomHorizontalFlip(0.5) -> ToTensor()",
         "effective_batch_size": BATCH_SIZE, "microbatch": microbatch, "precision": precision,
         "temporary_head": temporary_head, "optimizer": "sgd", "lr": LR, "momentum": MOMENTUM,
-        "weight_decay": WEIGHT_DECAY, "scheduler": "cosine", "adapter_bottleneck": BOTTLENECK,
-        "adapter_scale": ADAPTER_SCALE, "adapter_dropout": ADAPTER_DROPOUT,
+        "weight_decay": WEIGHT_DECAY, "scheduler": "cosine",
+        **({"adapter_bottleneck": BOTTLENECK, "adapter_scale": ADAPTER_SCALE,
+            "adapter_dropout": ADAPTER_DROPOUT} if petl == "adaptformer" else {"ssf_init_std": 0.02}),
         "M": projection_dim, "lambda_mode": "task_cv" if fixed_lambda is None else "fixed",
         "lambda_grid": list(RIDGE_GRID) if fixed_lambda is None else None,
         "lambda_fixed": fixed_lambda, "stats_device": str(stats_device), "stats_dtype": "float32",
@@ -225,11 +255,19 @@ def run_algorithm1(work_dir, *, run_label="main", resume=False, phase1_epochs=20
                   "version": version("wandb") if wandb is not None else None},
     }
     work_dir = Path(work_dir)
-    run_name = f"full-s{SEED}-{run_label}"
+    run_prefix = "full" if imagenetr_root is None else "full-imagenetr"
+    run_name = f"{run_prefix}-s{SEED}-{run_label}"
     run_dir = work_dir / "runs" / run_name
     checkpoint_path = run_dir / "checkpoint.pt"
     if resume:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        # Existing CIFAR-100 checkpoints retain their feature-cache identity.
+        previous_digest = checkpoint["config"].get("source_sha256")
+        if imagenetr_root is None and previous_digest in {
+            "ceb50cc1e96e9b1da60ca140c9c1728557a1f705779c67c94465622fded71c49",
+            "1a26a0627426b68b81986a9d768b851be8316329d7da1f9395dbfe21752cc033",
+        }:
+            config["source_sha256"] = previous_digest
         if checkpoint["config"] != config:
             raise ValueError("Config differs from the checkpoint. Restore it or use a new run label.")
     else:
@@ -263,12 +301,16 @@ def run_algorithm1(work_dir, *, run_label="main", resume=False, phase1_epochs=20
         if len(epochs) == last_epoch and (last_epoch < phase1_epochs or len(tasks) == stop_after_task):
             return
         torch.manual_seed(SEED)
-        backbone = build_adapted_backbone(device)
-        adapters = nn.ModuleList(block.adapter for block in backbone.blocks)
+        if imagenetr_root is None:
+            backbone = build_adapted_backbone(device)
+            adapters = nn.ModuleList(block.adapter for block in backbone.blocks)
+        else:
+            backbone, adapters = imagenetr.build_ssf_backbone(device)
         if checkpoint["adapter"] is not None:
             adapters.load_state_dict(checkpoint["adapter"])
         if len(epochs) < last_epoch:
-            fit_first_task(backbone, adapters, checkpoint, config, last_epoch, data_root, device, commit)
+            fit_first_task(backbone, adapters, checkpoint, config, last_epoch, data_root, device,
+                           commit, image_folder)
         if len(epochs) < phase1_epochs:
             return
 
@@ -278,19 +320,20 @@ def run_algorithm1(work_dir, *, run_label="main", resume=False, phase1_epochs=20
             "implementation_sha256": config["source_sha256"],
         }
         cache = FeatureCache(work_dir / "embeddings", data_root, cache_config, device,
-                             feature_batch_size, workers)
+                             feature_batch_size, workers, image_folder=image_folder)
         cache.model = backbone
-        classifier = Ridge(FEATURE_DIM, projection_dim=projection_dim, seed=SEED)
+        classifier = Ridge(FEATURE_DIM, num_classes=num_classes, projection_dim=projection_dim, seed=SEED)
         if checkpoint["ridge"] is not None:
             classifier.load_state_dict(checkpoint["ridge"], assign=True)
             checkpoint["ridge"] = None
         classifier.to(stats_device)
         for task in range(len(tasks) + 1, stop_after_task + 1):
-            record = train_task(classifier, cache, task, stats_device, device, fixed_lambda)
+            record = train_task(classifier, cache, task, stats_device, device, fixed_lambda,
+                                classes_per_task=classes_per_task, num_classes=num_classes)
             tasks.append(record)
             checkpoint["ridge"] = classifier.state_dict()
             commit("phase2", record)
-            print(f"Task {task:02}/{NUM_TASKS} | A[{task}] = {record['avg_accuracy_pct']:.2f}% "
+            print(f"Task {task:02}/{num_tasks} | A[{task}] = {record['avg_accuracy_pct']:.2f}% "
                   f"| {record['task_seconds']:.1f}s")
 
     print(f"Results: {run_dir}")
@@ -302,7 +345,7 @@ def run_algorithm1(work_dir, *, run_label="main", resume=False, phase1_epochs=20
             resume_option = "must" if checkpoint["wandb_initialized"] else "allow" if resume else "never"
         run_context = wandb.init(
             entity=entity, project=project, id=checkpoint["wandb_id"], name=run_name,
-            group="cifar100-algorithm1", config=config, mode=wandb_mode, resume=resume_option,
+            group=f"{dataset_tag}-algorithm1", config=config, mode=wandb_mode, resume=resume_option,
             dir=str(run_dir) if wandb_mode == "offline" else "/content",
         )
     with run_context as run:
@@ -323,7 +366,7 @@ def run_algorithm1(work_dir, *, run_label="main", resume=False, phase1_epochs=20
                     if step > logged:
                         log_record(run, phase, row, step)
         run_phases()
-        if len(tasks) == NUM_TASKS:
+        if len(tasks) == num_tasks:
             accuracy = tasks[-1]["avg_accuracy_pct"]
             if run is not None:
                 run.summary["a10_pct"] = accuracy
