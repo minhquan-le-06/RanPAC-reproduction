@@ -54,6 +54,8 @@ class AdaptedBlock(nn.Module):
 
 
 class CosineHead(nn.Module):
+    """Temporary cosine-similarity classification head used during Phase 1."""
+
     def __init__(self, num_classes=CLASSES_PER_TASK):
         super().__init__()
         self.prototypes = nn.Parameter(torch.empty(num_classes, FEATURE_DIM))
@@ -90,6 +92,7 @@ def first_task_images(data_root, class_order, classes_per_task=CLASSES_PER_TASK,
 
 
 def train_epoch(backbone, head, images, optimizer, scaler, epoch, *, device, microbatch, workers):
+    """Train the adapters and head for one Phase 1 epoch; return epoch statistics."""
     # Epoch-local RNG makes the data order and augmentation reproducible on resume.
     seed = SEED + epoch
     torch.manual_seed(seed)
@@ -132,6 +135,10 @@ def train_epoch(backbone, head, images, optimizer, scaler, epoch, *, device, mic
 
 def fit_first_task(backbone, adapters, checkpoint, config, last_epoch, data_root, device, commit,
                    image_folder=None):
+    """Phase 1: train AdaptFormer adapters on task 1, with epoch checkpoints.
+
+    Writes epoch checkpoints and logs Phase 1 metrics; returns nothing.
+    """
     classes_per_task = config["classes_per_task"]
     head = (CosineHead(classes_per_task) if config["temporary_head"] == "cosine"
             else nn.Linear(FEATURE_DIM, classes_per_task))

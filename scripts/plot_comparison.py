@@ -42,7 +42,7 @@ plt.ylim(80, 102)
 plt.grid(True, linestyle='--', alpha=0.5)
 plt.legend(loc='lower left', fontsize=9.5, framealpha=0.9)
 
-output_path = Path("accuracy_comparison.png")
+output_path = Path(__file__).resolve().parents[1] / "results" / "accuracy_comparison.png"
 plt.tight_layout()
 plt.savefig(output_path)
 print(f"Plot saved successfully to {output_path.resolve()}")

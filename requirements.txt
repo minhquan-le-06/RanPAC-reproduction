@@ -1,5 +1,5 @@
 # RanPAC reproduction – local environment
-# Install PyTorch with CUDA first (see SETUP.md), then:
+# Install PyTorch with CUDA first (see docs/SETUP.md), then:
 #   pip install -r requirements.txt
 
 timm==1.0.22

@@ -95,6 +95,18 @@ def log_task(wandb, run, records):
 
 def train_task(classifier, cache, task, stats_device, feature_device, fixed_lambda, *,
                classes_per_task=CLASSES_PER_TASK, num_classes=NUM_CLASSES):
+    """Train Phase 2 on one task: load embeddings, update the classifier, pick lambda, evaluate.
+
+    Args:
+        classifier: NCM or Ridge instance.
+        cache: FeatureCache providing train/test embeddings.
+        task: 1-based task index.
+        stats_device / feature_device: Devices for statistics and embedding.
+        fixed_lambda: Fixed ridge lambda, or None to select it per task.
+
+    Returns:
+        Record with accuracies, chosen lambda, timing and memory.
+    """
     started = perf_counter()
     if feature_device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(feature_device)
@@ -162,6 +174,20 @@ def train_task(classifier, cache, task, stats_device, feature_device, fixed_lamb
 def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_after_task=2,
                run_label="main", resume=False, wandb_mode="online", batch_size=48,
                stats_device="cpu", workers=2, data_root="/content/ranpac-data"):
+    """Run (or resume) a Phase 2 preset on Split CIFAR-100 and log to W&B.
+
+    Args:
+        preset: One of ncm, ridge, rp-table1, rp-table-a5.
+        work_dir: Output root for checkpoints, CSVs and embeddings.
+        entity / project: W&B destination.
+        stop_after_task: Last task to run (1-10).
+        run_label: Suffix identifying the run directory.
+        resume: Continue from checkpoint.pt if True.
+
+    Returns:
+        List of per-task records; metrics.csv and accuracy_matrix.csv are
+        written under work_dir.
+    """
     if not 1 <= stop_after_task <= NUM_TASKS:
         raise ValueError(f"Set stop_after_task between 1 and {NUM_TASKS}.")
     if not run_label or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for c in run_label):

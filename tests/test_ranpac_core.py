@@ -1,11 +1,15 @@
 """CPU checks for the Phase 2 protocol, ridge sweep and checkpoint state."""
 
 import io
+import sys
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 
 import torch
 from torch.nn import functional as F
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ranpac_core import NCM, Ridge, evaluate_seen, select_ridge, split_class_order
 from ranpac_data import TaskImages

@@ -45,7 +45,7 @@ plt.ylabel("Training Task (t)", fontsize=11, fontweight="bold")
 plt.xticks(range(10), [f"Task {k}" for k in range(1, 11)])
 plt.yticks(range(10), [f"After T{k}" for k in range(1, 11)])
 
-output_path = Path("forgetting_heatmap.png")
+output_path = Path(__file__).resolve().parents[1] / "results" / "forgetting_heatmap.png"
 plt.tight_layout()
 plt.savefig(output_path)
 print(f"Heatmap saved successfully to {output_path.resolve()}")
