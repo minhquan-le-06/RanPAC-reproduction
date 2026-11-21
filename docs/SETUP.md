@@ -7,7 +7,7 @@ All three ablation notebooks have already been run; the results are in the W&B p
 ## Installation
 
 1. Copy the repository (at least `src/` and `tests/`) to `MyDrive/RanPAC_implement`. If you place it elsewhere, edit `SOURCE_DIR` in the notebook. The notebooks add `SOURCE_DIR/src` to `sys.path`.
-2. Open the notebook in Google Colab and choose **Runtime → Change runtime type → GPU**. The two setup cells install `timm==1.0.22` and `wandb==0.31.0` and mount Drive. PyTorch and torchvision come from the Colab runtime. CIFAR-100 and the ViT weights are downloaded automatically when embeddings are extracted.
+2. Open the notebook in Google Colab and choose **Runtime → Change runtime type → GPU**. The two setup cells install `timm==1.0.22`, `wandb==0.31.0` and `datasets` and mount Drive. PyTorch and torchvision come from the Colab runtime. CIFAR-100 (from the Hugging Face Hub) and the ViT weights are downloaded automatically when embeddings are extracted.
 3. Add `WANDB_API_KEY` to **Colab Secrets** and grant the notebook access. All three notebooks log online to `pnp123/ML` (`WANDB_ENTITY = 'pnp123'`, `WANDB_PROJECT = 'ML'`); use an API key with write access to that project, or change `WANDB_ENTITY` and `WANDB_PROJECT` to your own.
 
 ## Notebook configuration
@@ -47,7 +47,7 @@ Open [06_ranpac_full_imagenetr.ipynb](../notebooks/06_ranpac_full_imagenetr.ipyn
 | Default path | Notebook variable |
 | --- | --- |
 | `MyDrive/RanPAC_implement/RanPAC-reimplement-imagenetr.zip` (a zip of this repository; the notebook adds its `src/` folder to `sys.path`) | `SOURCE_ZIP` |
-| `MyDrive/imagenet-r.zip`, with the same `train/` and `test/` split as the authors' notebook. The notebook downloads it if missing. | `DATASET_INPUT` |
+| Downloaded at run time from Hugging Face ([`lmcu000/imagenet-r-split`](https://huggingface.co/datasets/lmcu000/imagenet-r-split)): the authors' `train/` and `test/` split of ImageNet-R. | `IMAGENET_R_HF_REPO` |
 | `MyDrive/ranpac-runs/` for checkpoints and results | `WORK_DIR` |
 
 W&B logs online to `pnp123/ML` by default, as in notebook 04; grant the notebook read access to the Colab secret `WANDB_API_KEY`. To try one epoch, set `STOP_AFTER_EPOCH = 1` and keep `PHASE1_EPOCHS = 20`. Then set `RESUME = True`, `STOP_AFTER_EPOCH = None` and keep the same run label, W&B mode and training configuration.

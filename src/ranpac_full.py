@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 from ranpac_colab import configure_wandb, export_results, save_checkpoint, train_task
 from ranpac_core import CLASSES_PER_TASK, NUM_CLASSES, RIDGE_GRID, SEED, Ridge, split_class_order
 from ranpac_data import (
-    CHECKPOINT_URL, FEATURE_DIM, MODEL_ID, FeatureCache, TaskImages, atomic_output,
+    CHECKPOINT_URL, FEATURE_DIM, MODEL_ID, FeatureCache, TaskImages, atomic_output, load_cifar100,
     feature_config,
 )
 
@@ -79,14 +79,14 @@ def build_adapted_backbone(device):
 
 
 def first_task_images(data_root, class_order, classes_per_task=CLASSES_PER_TASK, image_folder=None):
-    from torchvision import datasets, transforms
+    from torchvision import transforms
 
     transform = transforms.Compose([
         transforms.RandomResizedCrop(224, scale=(0.05, 1.0), ratio=(3 / 4, 4 / 3)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ])
-    dataset = (datasets.CIFAR100(data_root, train=True, transform=transform, download=True)
+    dataset = (load_cifar100("train", transform, data_root)
                if image_folder is None else image_folder("train", transform))
     return TaskImages(dataset, class_order, task=1, classes_per_task=classes_per_task)
 

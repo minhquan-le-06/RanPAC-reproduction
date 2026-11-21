@@ -99,13 +99,13 @@ All runs are logged to the W&B project [pnp123/ML](https://wandb.ai/pnp123/ML). 
 
 - **Seeds**: the class order and all random projections use seed `1993`; per-task `λ` selection uses `1993 + task`; Phase 1 data order uses `1993 + epoch`. Seeds are defined in `src/ranpac_core.py` and stored in each run's `config.json`.
 - **Standard stack**: `numpy`, `torch`, `torchvision`, `Pillow`.
-- **Extra libraries**: `timm` supplies the pre-trained ViT-B/16 weights and blocks (re-implementing and re-training ImageNet-21K weights is out of scope); `wandb` logs every run to the public project above.
+- **Extra libraries**: `timm` supplies the pre-trained ViT-B/16 weights and blocks (re-implementing and re-training ImageNet-21K weights is out of scope); `wandb` logs every run to the public project above; `datasets` downloads CIFAR-100 from the Hugging Face Hub.
 - **Own implementation**: random projection, accumulated ridge regression, `λ` selection, NCM, the AdaptFormer adapters and the two-phase loop were written from the paper's description. The authors' code was only run to compare outputs (ImageNet-R baseline notebook), never copied.
-- **Reused**: ViT backbone and CIFAR-100 loader from `timm` and `torchvision`.
+- **Reused**: ViT backbone and pre-trained weights from `timm`, image transforms from `torchvision`, CIFAR-100 from the Hugging Face Hub.
 
 ## 7. Data and backbone
 
-- **Dataset**: CIFAR-100, downloaded automatically and split into 10 tasks with seed `1993`. ImageNet-R is described in [docs/SETUP.md](docs/SETUP.md).
+- **Dataset**: CIFAR-100, loaded at run time from the Hugging Face Hub ([`uoft-cs/cifar100`](https://huggingface.co/datasets/uoft-cs/cifar100)) with no manual preparation, and split into 10 tasks with seed `1993`. ImageNet-R (the authors' train/test split, re-hosted for this project) is loaded at run time from [`lmcu000/imagenet-r-split`](https://huggingface.co/datasets/lmcu000/imagenet-r-split) on the Hugging Face Hub; see [docs/SETUP.md](docs/SETUP.md).
 - **Backbone**: `vit_base_patch16_224.augreg_in21k`, loaded through `timm`.
 
 ## 8. Citation

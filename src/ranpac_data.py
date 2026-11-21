@@ -22,6 +22,7 @@ CHECKPOINT_URL = (
     "B_16-i21k-300ep-lr_0.001-aug_medium1-wd_0.1-do_0.0-sd_0.0.npz"
 )
 FEATURE_DIM = 768
+CIFAR100_HF_ID = "uoft-cs/cifar100"
 
 
 @contextmanager
@@ -52,6 +53,45 @@ def feature_config(class_order, device):
         "fused_attention": False,
         "feature_libraries": {p: version(p) for p in ("torch", "torchvision", "timm", "Pillow")},
     }
+
+
+class HFImages(Dataset):
+    """Image-classification view of a Hugging Face dataset.
+
+    Args:
+        hf_dataset: A `datasets.Dataset` with `img` and `fine_label` columns.
+        transform: Transform applied to each PIL image.
+
+    Exposes `targets` (list of labels) so TaskImages can filter by class.
+    """
+
+    def __init__(self, hf_dataset, transform):
+        self.data = hf_dataset
+        self.transform = transform
+        self.targets = list(hf_dataset["fine_label"])
+
+    def __len__(self):
+        return len(self.targets)
+
+    def __getitem__(self, index):
+        row = self.data[int(index)]
+        return self.transform(row["img"].convert("RGB")), int(row["fine_label"])
+
+
+def load_cifar100(split, transform, data_root):
+    """Load CIFAR-100 from the Hugging Face Hub at run time (no manual download).
+
+    Args:
+        split: "train" (50,000 images) or "test" (10,000 images).
+        transform: Transform applied to each image.
+        data_root: Directory used as the Hugging Face cache.
+
+    Returns:
+        HFImages dataset whose class ids match the original CIFAR-100 ordering.
+    """
+    from datasets import load_dataset
+
+    return HFImages(load_dataset(CIFAR100_HF_ID, split=split, cache_dir=str(data_root)), transform)
 
 
 class TaskImages(Dataset):
@@ -100,7 +140,7 @@ class FeatureCache:
 
     def extract(self, split, task):
         import timm
-        from torchvision import datasets, transforms
+        from torchvision import transforms
 
         if split not in self.datasets:
             transform = transforms.Compose([
@@ -110,9 +150,7 @@ class FeatureCache:
                 transforms.ToTensor(),
             ])
             if self.image_folder is None:
-                self.datasets[split] = datasets.CIFAR100(
-                    root=self.data_root, train=split == "train", transform=transform, download=True,
-                )
+                self.datasets[split] = load_cifar100(split, transform, self.data_root)
             else:
                 self.datasets[split] = self.image_folder(split, transform)
 

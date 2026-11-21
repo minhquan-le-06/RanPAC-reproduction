@@ -4,6 +4,7 @@
 
 timm==1.0.22
 wandb==0.31.0
+datasets
 torchvision
 numpy
 Pillow
