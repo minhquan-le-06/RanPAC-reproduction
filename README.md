@@ -41,8 +41,9 @@ src/            Core library and runners
   ranpac_colab.py       Phase 2 runner, W&B logging, checkpoints
   ranpac_full.py        Algorithm 1 (AdaptFormer Phase 1 + Phase 2)
   ranpac_imagenetr.py   ImageNet-R dataset support
+  ranpac_critique.py    Stress-test runners for Phase 1 bias, class imbalance & backbones
   run_local.py          Local (non-Colab) CLI runner
-notebooks/      Colab notebooks 01-06 and the original-code ImageNet-R baseline
+notebooks/      Colab notebooks 01-13 and the original-code ImageNet-R baseline
 scripts/        plot_comparison.py, plot_heatmap.py, rank_sweep_g.py
 tests/          CPU unit tests for the Phase 2 protocol
 results/        results.md, figures and CSV outputs
@@ -58,7 +59,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-**Colab**: follow [docs/SETUP.md](docs/SETUP.md) and run notebooks `01`–`06`.
+**Colab**: follow [docs/SETUP.md](docs/SETUP.md) and run notebooks `01`–`13`.
 
 **Local** (from the repository root):
 
@@ -94,6 +95,13 @@ All runs are logged to the W&B project [pnp123/ML](https://wandb.ai/pnp123/ML). 
 | Algorithm 1, 92.02% | `notebooks/04_ranpac_full.ipynb` | [pnp123/ML](https://wandb.ai/pnp123/ML) | Phase 1 adaptation on task 1 adds about 3 pp over Phase 2 alone. |
 | `M` sweep | `notebooks/05_ranpac_m_sweep.ipynb` | [pnp123/ML](https://wandb.ai/pnp123/ML) | Accuracy, time and memory versus projection size `M`. |
 | ImageNet-R | `notebooks/06_ranpac_full_imagenetr.ipynb` | [pnp123/ML](https://wandb.ai/pnp123/ML) | Algorithm 1 against the authors' code on a harder benchmark. |
+| Linear RP control | `notebooks/07_ridge_rp_linear.ipynb` | [pnp123/RanPAC-reproduction](https://wandb.ai/pnp123/RanPAC-reproduction) | Verifies Property 2 (`H = FW` without ReLU caps `rank(G) <= 768`). |
+| Table A5 & `λ` sensitivity | `notebooks/08_ranpac_lambda_and_table_a5.ipynb` | [pnp123/RanPAC-reproduction](https://wandb.ai/pnp123/RanPAC-reproduction) | Fixed `λ=100` Table A5 check and `λ` scale-mismatch critique. |
+| Activation ablation | `notebooks/09_ranpac_activation_ablation.ipynb` | [pnp123/RanPAC-reproduction](https://wandb.ai/pnp123/RanPAC-reproduction) | Compares `linear`, `relu`, `leaky_relu`, `gelu`, `tanh`, `abs` and `G` spectrum. |
+| Phase 1 Table 1 ablations | `notebooks/10_ranpac_phase1_ablations.ipynb` | [pnp123/RanPAC-reproduction](https://wandb.ai/pnp123/RanPAC-reproduction) | Completes `NCM with Phase 1` and `No RPs` reusing Notebook 04's adapter. |
+| First-task bias critique | `notebooks/11_ranpac_first_task_bias.ipynb` | [pnp123/RanPAC-reproduction](https://wandb.ai/pnp123/RanPAC-reproduction) | Stress-tests Phase 1 AdaptFormer under narrow (`B=2, 5`) and flora-only Task 1. |
+| Class imbalance critique | `notebooks/12_ranpac_class_imbalance.ipynb` | [pnp123/RanPAC-reproduction](https://wandb.ai/pnp123/RanPAC-reproduction) | Shows unweighted `Ridge+RP` tail collapse vs count-invariant `NCM` & `CB-Ridge`. |
+| Backbone sensitivity critique | `notebooks/13_ranpac_backbone_sensitivity.ipynb` | [pnp123/RanPAC-reproduction](https://wandb.ai/pnp123/RanPAC-reproduction) | Evaluates IN-21K vs IN-1K, DINO (self-sup.) and ViT-Tiny with Fisher geometry. |
 
 ## 6. Reproducibility, dependencies and reuse
 

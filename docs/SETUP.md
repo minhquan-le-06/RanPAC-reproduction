@@ -53,3 +53,15 @@ Open [06_ranpac_full_imagenetr.ipynb](../notebooks/06_ranpac_full_imagenetr.ipyn
 W&B logs online to `pnp123/ML` by default, as in notebook 04; grant the notebook read access to the Colab secret `WANDB_API_KEY`. To try one epoch, set `STOP_AFTER_EPOCH = 1` and keep `PHASE1_EPOCHS = 20`. Then set `RESUME = True`, `STOP_AFTER_EPOCH = None` and keep the same run label, W&B mode and training configuration.
 
 The last cell reads the authors' preset 7 results from `MyDrive/RanPAC-original-imagenetr-results/` to build the comparison table and plot. Run it after both runs have finished all 10 tasks.
+
+## Extended ablations & empirical critiques (`07`–`13`)
+
+Copy `src/` (including `ranpac_critique.py` and `test_ranpac_core.py`) to `MyDrive/RanPAC_implement/src/` (or directly into `MyDrive/RanPAC_implement/`). Notebooks `11`–`13` automatically detect either layout (`SOURCE_DIR/src` or flat `SOURCE_DIR`):
+
+- **[07_ridge_rp_linear.ipynb](../notebooks/07_ridge_rp_linear.ipynb)**: Linear RP control (`H = F @ W`, no ReLU) paired with Notebook 05 across `M`.
+- **[08_ranpac_lambda_and_table_a5.ipynb](../notebooks/08_ranpac_lambda_and_table_a5.ipynb)**: Direct Table A5 reproduction (`λ = 100`) and `λ` sensitivity / scale-mismatch study.
+- **[09_ranpac_activation_ablation.ipynb](../notebooks/09_ranpac_activation_ablation.ipynb)**: Nonlinearity ablation (`linear`, `relu`, `leaky_relu`, `gelu`, `tanh`, `abs`) and `G` spectrum diagnostics.
+- **[10_ranpac_phase1_ablations.ipynb](../notebooks/10_ranpac_phase1_ablations.ipynb)**: Completes Table 1 `NCM with Phase 1` and `No RPs` from Notebook 04's Phase 1 checkpoint.
+- **[11_ranpac_first_task_bias.ipynb](../notebooks/11_ranpac_first_task_bias.ipynb)**: Stress-tests Phase 1 first-session bias (`b10-random`, `b5-narrow`, `b2-narrow`, `b10-flora`) with paired `No Phase 1` controls.
+- **[12_ranpac_class_imbalance.ipynb](../notebooks/12_ranpac_class_imbalance.ipynb)**: Stress-tests Phase 2 unweighted Ridge under step & long-tail class imbalance (`ρ = 1..50`) vs `NCM` and `ClassBalancedRidge`.
+- **[13_ranpac_backbone_sensitivity.ipynb](../notebooks/13_ranpac_backbone_sensitivity.ipynb)**: Evaluates pre-trained backbone dependency (`ViT-B/16 IN-21K`, `IN-1K`, `DINO`, `ViT-Ti/16`) alongside Fisher discriminant geometry.
