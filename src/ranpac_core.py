@@ -11,65 +11,59 @@ CLASSES_PER_TASK = 10
 NUM_TASKS = NUM_CLASSES // CLASSES_PER_TASK
 SEED = 1993
 RIDGE_GRID = tuple(10.0**power for power in range(-8, 9))
+ACTIVATIONS = ("relu", "linear", "gelu", "tanh", "leaky_relu", "abs")
+
+
+def apply_activation(projected, activation, *, inplace=False):
+    """Apply elementwise nonlinearity after random projection."""
+    if activation == "relu":
+        return projected.relu_() if inplace else F.relu(projected)
+    if activation == "linear":
+        return projected
+    if activation == "gelu":
+        return F.gelu(projected)
+    if activation == "tanh":
+        return torch.tanh(projected)
+    if activation == "leaky_relu":
+        return F.leaky_relu(projected, negative_slope=0.1, inplace=inplace)
+    if activation == "abs":
+        return projected.abs_() if inplace else projected.abs()
+    raise ValueError(f"Unsupported activation {activation!r}. Choose from {ACTIVATIONS}.")
 
 
 def split_class_order(seed=SEED, *, num_classes=NUM_CLASSES):
-    """Return the random class order that defines the task split.
-
-    Args:
-        seed: Seed for the permutation (default 1993).
-        num_classes: Number of classes to permute.
-
-    Returns:
-        List of class ids; task t uses entries [10*(t-1), 10*t).
-    """
-    # RandomState gives the same permutation as np.random.seed + permutation.
+    # RandomState reproduces the authors' np.random.seed + permutation.
     return np.random.RandomState(seed).permutation(num_classes).tolist()
 
 
 class NCM(nn.Module):
-    """Nearest-class-mean classifier with cosine similarity (Phase 2 baseline)."""
-
     def __init__(self, feature_dim, num_classes=NUM_CLASSES):
         super().__init__()
         self.register_buffer("sums", torch.zeros(num_classes, feature_dim))
         self.register_buffer("counts", torch.zeros(num_classes, dtype=torch.long))
 
     def update(self, features, labels):
-        """Accumulate per-class feature sums and counts.
-
-        Args:
-            features: (N, D) embeddings.
-            labels: (N,) integer class ids.
-        """
         self.sums.index_add_(0, labels, features)
         self.counts += torch.bincount(labels, minlength=self.counts.numel())
 
     def weights(self, seen_classes):
-        """Return the (D, seen_classes) matrix of L2-normalised class means."""
         means = self.sums[:seen_classes] / self.counts[:seen_classes, None]
         return F.normalize(means, dim=1).T
 
     def logits(self, features, weights):
-        """Cosine similarity between normalised features and class means."""
         return F.normalize(features, dim=1) @ weights
 
 
 class Ridge(nn.Module):
-    """Ridge-regression classifier with optional random projection (RanPAC Phase 2).
-
-    Keeps the accumulated Gram matrix G = sum H^T H and correlation C = sum H^T Y,
-    where H = ReLU(F W) with a fixed Gaussian W (or H = F if projection_dim is 0).
-
-    Args:
-        feature_dim: Backbone feature size D.
-        num_classes: Total number of classes.
-        projection_dim: Random projection size M (0 disables projection).
-        seed: Seed for the Gaussian projection matrix.
-    """
-
-    def __init__(self, feature_dim, num_classes=NUM_CLASSES, projection_dim=0, seed=SEED):
+    def __init__(self, feature_dim, num_classes=NUM_CLASSES, projection_dim=0, seed=SEED,
+                 use_relu=True, *, activation=None):
         super().__init__()
+        if activation is None:
+            activation = "relu" if use_relu else "linear"
+        if activation not in ACTIVATIONS:
+            raise ValueError(f"Unsupported activation {activation!r}. Choose from {ACTIVATIONS}.")
+        self.activation = activation
+        self.use_relu = activation == "relu"
         generator = torch.Generator().manual_seed(seed)
         self.register_buffer(
             "W", torch.randn(feature_dim, projection_dim, generator=generator)
@@ -80,28 +74,17 @@ class Ridge(nn.Module):
         self.register_buffer("C", torch.zeros(dim, num_classes))
 
     def project(self, features):
-        """Apply the fixed random projection and ReLU (identity if no projection)."""
         if self.W is None:
             return features
-        return (features @ self.W).relu_()
+        projected = features @ self.W
+        return apply_activation(projected, self.activation, inplace=True)
 
     def update(self, projected, labels):
-        """Add a batch to G and C.
-
-        Args:
-            projected: (N, M) output of project().
-            labels: (N,) integer class ids.
-        """
         targets = F.one_hot(labels, num_classes=self.C.shape[1]).to(projected.dtype)
         self.G.addmm_(projected.T, projected)
         self.C.addmm_(projected.T, targets)
 
     def weights(self, seen_classes, ridge):
-        """Solve (G + ridge I) W = C for the first seen_classes columns.
-
-        Returns:
-            (M, seen_classes) classifier weights.
-        """
         # Promote if a small lambda could be lost when added to the FP32 diagonal.
         resolution = self.G.diagonal().max().item() * torch.finfo(self.G.dtype).eps
         dtype = torch.float64 if ridge <= resolution else self.G.dtype
@@ -110,24 +93,11 @@ class Ridge(nn.Module):
         return torch.linalg.solve(system, self.C[:, :seen_classes].to(dtype)).to(self.C.dtype)
 
     def logits(self, features, weights):
-        """Project raw features and score them with the given weights."""
         return self.project(features) @ weights
 
 
 def select_ridge(projected, labels, num_classes, seed, task, grid=RIDGE_GRID):
-    """Select lambda on an 80/20 split of the current task's train samples.
-
-    Args:
-        projected: (N, M) projected training features of the current task.
-        labels: (N,) class ids.
-        num_classes: Total number of classes (one-hot width).
-        seed: Base seed; the split uses seed + task.
-        task: 1-based task index.
-        grid: Candidate lambda values.
-
-    Returns:
-        The lambda with the lowest validation MSE.
-    """
+    """Select lambda on an 80/20 split of the current task's train samples."""
     generator = torch.Generator().manual_seed(seed + task)
     indices = torch.randperm(len(labels), generator=generator).to(labels.device)
     split = int(0.8 * len(labels))
@@ -154,21 +124,44 @@ def select_ridge(projected, labels, num_classes, seed, task, grid=RIDGE_GRID):
     return min(zip(losses, grid))[1]
 
 
+def gram_spectrum_stats(gram):
+    """Compute numerical rank diagnostics from an accumulated symmetric Gram matrix G."""
+    m = gram.shape[0]
+    eps = torch.finfo(gram.dtype).eps
+    ev = torch.linalg.eigvalsh(gram.to(torch.float64))
+    ev_pos = ev.clamp_min(0.0)
+    lam_max = float(ev_pos[-1].item()) if m else 0.0
+    lam_second = float(ev_pos[-2].item()) if m > 1 else lam_max
+    tol_standard = lam_max * m * eps
+    rank_standard = int((ev > tol_standard).sum().item())
+    if m > 1 and lam_max > 0:
+        tol_deflated = lam_second * m * eps
+        rank_deflated_dc = 1 + int((ev[:-1] > tol_deflated).sum().item())
+    else:
+        tol_deflated = tol_standard
+        rank_deflated_dc = rank_standard
+    total = float(ev_pos.sum().item())
+    if total > 0:
+        probs = ev_pos[ev_pos > 0] / total
+        effective_rank = float(torch.exp(-(probs * probs.log()).sum()).item())
+    else:
+        effective_rank = 0.0
+    return {
+        "M": m,
+        "g_dtype": str(gram.dtype),
+        "lambda_max": lam_max,
+        "lambda_second": lam_second,
+        "top1_to_top2_ratio": (lam_max / lam_second) if lam_second > 0 else float("inf"),
+        "tol_standard": tol_standard,
+        "rank_standard": rank_standard,
+        "tol_deflated_dc": tol_deflated,
+        "rank_deflated_dc": rank_deflated_dc,
+        "effective_rank": effective_rank,
+    }
+
+
 def evaluate_seen(classifier, weights, test_shards, device, batch_size=512):
-    """Per-shard accuracy (%) of one class-incremental head.
-
-    Each shard groups the metric only; all examples use the same head.
-
-    Args:
-        classifier: Object exposing logits(features, weights).
-        weights: Classifier weights over all seen classes.
-        test_shards: Iterable of (features, labels), one per task.
-        device: Device used for scoring.
-        batch_size: Scoring batch size.
-
-    Returns:
-        List of accuracies in percent, one per shard.
-    """
+    """Each shard groups the metric only. All examples use the same CIL head."""
     accuracies = []
     for features, labels in test_shards:
         correct = 0

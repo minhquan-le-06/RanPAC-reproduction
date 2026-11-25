@@ -12,7 +12,7 @@ from uuid import uuid4
 import torch
 
 from ranpac_core import (
-    CLASSES_PER_TASK, NUM_CLASSES, NUM_TASKS, RIDGE_GRID, SEED, NCM, Ridge,
+    ACTIVATIONS, CLASSES_PER_TASK, NUM_CLASSES, NUM_TASKS, RIDGE_GRID, SEED, NCM, Ridge,
     evaluate_seen, select_ridge, split_class_order,
 )
 from ranpac_data import FEATURE_DIM, FeatureCache, atomic_output, feature_config
@@ -33,6 +33,45 @@ PRESETS = {
 
 SWEEP_DIMS = (300, 500, 1000, 1250, 2500, 10000)
 PRESETS.update({f"rp-sweep-m{dim}": ("ridge-rp", dim, None, None) for dim in SWEEP_DIMS})
+LINEAR_DIMS = (300, 500, 768, 1000, 1250, 2500, 5000, 10000)
+PRESETS.update({f"rp-linear-m{dim}": ("ridge-rp-linear", dim, None, None)
+                for dim in LINEAR_DIMS})
+
+TABLE_A5_PAPER = {
+    100: 71.6,
+    200: 80.3,
+    400: 83.9,
+    800: 86.2,
+    1250: 86.8,
+    2500: 87.7,
+    5000: 88.4,
+    10000: 88.8,
+    15000: 89.0,
+}
+TABLE_A5_DIMS = tuple(TABLE_A5_PAPER)
+PRESETS.update({
+    f"rp-a5-m{dim}": ("ridge-rp", dim, 100.0, acc)
+    for dim, acc in TABLE_A5_PAPER.items()
+})
+
+ACTIVATION_SWEEP_DIMS = (768, 1250, 2500, 5000, 10000)
+for _act in ACTIVATIONS:
+    _method = "ridge-rp" if _act == "relu" else f"ridge-rp-{_act}"
+    for _dim in ACTIVATION_SWEEP_DIMS:
+        PRESETS[f"rp-act-{_act}-m{_dim}"] = (_method, _dim, None, None)
+
+
+def method_activation(method):
+    """Map a Phase 2 method string to its projection nonlinearity."""
+    if method in {"ncm", "ridge"}:
+        return None
+    if method == "ridge-rp":
+        return "relu"
+    if method.startswith("ridge-rp-"):
+        act = method.removeprefix("ridge-rp-")
+        if act in ACTIVATIONS:
+            return act
+    raise ValueError(f"Unsupported Phase 2 method {method!r}.")
 
 
 def configure_wandb(entity, mode):
@@ -49,7 +88,7 @@ def configure_wandb(entity, mode):
     return wandb
 
 
-def smoke_wandb(entity, project):
+def smoke_wandb(entity, project="RanPAC-reproduction"):
     wandb = configure_wandb(entity, "online")
     with wandb.init(entity=entity, project=project, name="smoke-colab", mode="online",
                     config={"purpose": "smoke"}) as run:
@@ -94,19 +133,8 @@ def log_task(wandb, run, records):
 
 
 def train_task(classifier, cache, task, stats_device, feature_device, fixed_lambda, *,
-               classes_per_task=CLASSES_PER_TASK, num_classes=NUM_CLASSES):
-    """Train Phase 2 on one task: load embeddings, update the classifier, pick lambda, evaluate.
-
-    Args:
-        classifier: NCM or Ridge instance.
-        cache: FeatureCache providing train/test embeddings.
-        task: 1-based task index.
-        stats_device / feature_device: Devices for statistics and embedding.
-        fixed_lambda: Fixed ridge lambda, or None to select it per task.
-
-    Returns:
-        Record with accuracies, chosen lambda, timing and memory.
-    """
+               classes_per_task=CLASSES_PER_TASK, num_classes=NUM_CLASSES,
+               measure_rank=False):
     started = perf_counter()
     if feature_device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(feature_device)
@@ -148,6 +176,13 @@ def train_task(classifier, cache, task, stats_device, feature_device, fixed_lamb
         feature_seconds += seconds
     eval_started = perf_counter()
     accuracies = evaluate_seen(classifier, weights, test_shards, stats_device)
+    gram_rank = gram_tolerance = None
+    if measure_rank and task == NUM_TASKS:
+        # G is accumulated in FP32. Match the tolerance to its stored precision,
+        # otherwise roundoff can make a theoretically rank-768 matrix look full rank.
+        eigenvalues = torch.linalg.eigvalsh(classifier.G)
+        gram_tolerance = eigenvalues.max().item() * classifier.G.shape[0] * torch.finfo(classifier.G.dtype).eps
+        gram_rank = int((eigenvalues > gram_tolerance).sum().item())
     return {
         "task": task,
         "seen_classes": seen_classes,
@@ -156,6 +191,8 @@ def train_task(classifier, cache, task, stats_device, feature_device, fixed_lamb
         "ridge_lambda": ridge,
         "lambda_search_seconds": lambda_seconds,
         "ridge_solve_seconds": solve_seconds,
+        "gram_rank": gram_rank,
+        "gram_rank_tolerance": gram_tolerance,
         "feature_seconds": feature_seconds,
         "fit_seconds": fit_seconds,
         "eval_seconds": perf_counter() - eval_started,
@@ -171,23 +208,11 @@ def train_task(classifier, cache, task, stats_device, feature_device, fixed_lamb
     }
 
 
-def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_after_task=2,
+def run_phase2(preset, work_dir, *, entity, project="RanPAC-reproduction", stop_after_task=2,
                run_label="main", resume=False, wandb_mode="online", batch_size=48,
-               stats_device="cpu", workers=2, data_root="/content/ranpac-data"):
-    """Run (or resume) a Phase 2 preset on Split CIFAR-100 and log to W&B.
-
-    Args:
-        preset: One of ncm, ridge, rp-table1, rp-table-a5.
-        work_dir: Output root for checkpoints, CSVs and embeddings.
-        entity / project: W&B destination.
-        stop_after_task: Last task to run (1-10).
-        run_label: Suffix identifying the run directory.
-        resume: Continue from checkpoint.pt if True.
-
-    Returns:
-        List of per-task records; metrics.csv and accuracy_matrix.csv are
-        written under work_dir.
-    """
+               stats_device="cpu", workers=2, data_root="/content/ranpac-data",
+               fixed_lambda_override=None, measure_rank=None, extra_tags=None,
+               wandb_group_override=None):
     if not 1 <= stop_after_task <= NUM_TASKS:
         raise ValueError(f"Set stop_after_task between 1 and {NUM_TASKS}.")
     if not run_label or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for c in run_label):
@@ -202,10 +227,15 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     feature_device = torch.device("cuda")
     stats_device = torch.device(stats_device)
     method, projection_dim, fixed_lambda, paper_accuracy = PRESETS[preset]
-    reference_table = "A5" if preset == "rp-table-a5" else "1"
+    if fixed_lambda_override is not None:
+        fixed_lambda = float(fixed_lambda_override)
+        if fixed_lambda <= 0 or not (fixed_lambda < float("inf")):
+            raise ValueError("fixed_lambda_override must be positive and finite.")
+        paper_accuracy = None
+    reference_table = "A5" if (preset == "rp-table-a5" or preset.startswith("rp-a5-m")) else "1"
     if paper_accuracy is None:
         reference_table = None
-    wandb_group = (
+    wandb_group = wandb_group_override or (
         f"cifar100-phase2-table-{reference_table}" if reference_table
         else f"cifar100-phase2-m-sweep-{run_label}"
     )
@@ -242,11 +272,13 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     if resume:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         identity = checkpoint["wandb"]
-        # The ImageNet-R extension preserves the CIFAR-100 Phase 2 protocol.
+        # Preserve historical CIFAR-100 Phase 2 checkpoint digests across extensions.
         previous_digest = checkpoint["config"].get("source_sha256")
         if previous_digest in {
             "b459877b18fcc979e6589f8b06a8e7b0e325ae6ab64ac42f0d62b7704a3ab6de",
             "f4708c06fb9f9be786b1ef8ac1cea5472eb3873ef3b1616be9657944b142370b",
+            "0b014c57bf5b302705bc5123386618d097dbd533075bf3b806d03ee274d681e4",
+            "95048dc5ccbaf7f7243d32eb58e5eccfef423376183e46664f2f8fccded00a27",
         }:
             config["source_sha256"] = previous_digest
         if checkpoint["config"] != config or (identity["entity"], identity["project"]) != (entity, project):
@@ -264,7 +296,12 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     with atomic_output(config_path) as temp:
         temp.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
-    classifier = NCM(FEATURE_DIM) if method == "ncm" else Ridge(FEATURE_DIM, projection_dim=projection_dim)
+    activation = method_activation(method)
+    classifier = (
+        NCM(FEATURE_DIM) if method == "ncm" else
+        Ridge(FEATURE_DIM, projection_dim=projection_dim) if method == "ridge" else
+        Ridge(FEATURE_DIM, projection_dim=projection_dim, activation=activation)
+    )
     if checkpoint["model"] is not None:
         classifier.load_state_dict(checkpoint["model"])
         checkpoint["model"] = None
@@ -275,9 +312,13 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
     resume_option = None
     if wandb_mode == "online":
         resume_option = "must" if identity["initialized"] else "allow" if resume else "never"
+    tags = list(dict.fromkeys([method, *(extra_tags or ())]))
+    should_measure_rank = (
+        method not in {"ncm", "ridge", "ridge-rp"} if measure_rank is None else bool(measure_rank)
+    )
     with wandb.init(
         entity=entity, project=project, id=identity["id"], name=run_name,
-        group=wandb_group, tags=[method],
+        group=wandb_group, tags=tags,
         config=config, mode=wandb_mode, resume=resume_option, dir=str(log_dir),
     ) as run:
         if not identity["initialized"] or (wandb_mode == "online" and not identity["url"]):
@@ -301,7 +342,13 @@ def run_phase2(preset, work_dir, *, entity, project="ranpac-cifar100", stop_afte
                 log_task(wandb, run, records[:task])
 
         for task in range(len(records) + 1, stop_after_task + 1):
-            record = train_task(classifier, cache, task, stats_device, feature_device, fixed_lambda)
+            record = train_task(
+                classifier, cache, task, stats_device, feature_device, fixed_lambda,
+                measure_rank=should_measure_rank,
+            )
+            record["cumulative_ridge_solve_seconds"] = sum(
+                previous.get("ridge_solve_seconds") or 0 for previous in records
+            ) + (record.get("ridge_solve_seconds") or 0)
             records.append(record)
             checkpoint["model"] = classifier.state_dict()
             identity["url"] = run.url or identity["url"]
